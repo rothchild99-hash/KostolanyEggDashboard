@@ -12,12 +12,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Kostolany Egg" />
-  <!-- Libraries (CDN, 빌드 불필요) -->
+  <!-- Libraries (CDN, 빌드 불필요)
+       ⚠ 버전을 반드시 고정할 것. 과거 무버전 URL을 쓰다가 두 가지가 동시에 깨졌다:
+        1) @babel/standalone 이 8.x로 올라가며 preset-react 기본값이 automatic runtime이 됨
+           → 컴파일 결과에 import 문이 생겨 일반 스크립트에서 "Cannot use import statement
+             outside a module" 오류 → 화면이 '로딩 중'에서 정지. 7.x로 고정해 classic runtime 사용.
+        2) recharts 패키지에는 umd/Recharts.min.js 가 존재하지 않음(umd/Recharts.js 만 제공)
+           → 404로 Recharts 전역이 undefined가 되어 최상위 구조분해에서 즉시 실패. -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <!-- recharts 2.x UMD는 전역 PropTypes를 요구한다(빠지면 Recharts 로드 자체가 실패) -->
+  <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script crossorigin src="https://unpkg.com/recharts@2.15.4/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.8/babel.min.js"></script>
   <style>
     html, body { margin: 0; background: #020617; }
     #loading { color:#64748b; font-family: ui-sans-serif, system-ui; text-align:center; padding:60px 0; }
@@ -64,8 +72,8 @@ function noise(i, seed) {
 /* ---------- 실측 앵커 기반 거시 모델 (m: 0 = 2023-01) ----------
  * END_M(차트 종점)은 페이지를 여는 시점의 현재 월로 자동 계산된다 → 날짜 자동 갱신.
  * 갱신 시에는 LATEST의 6개 "실측 원값"만 교체한다(보정 상수 수기 입력 불필요).
- * 2026-08-05 실측 교차검증(8/4 종가/최근치): Fed 3.625%(7/29 FOMC 5회 연속 동결, 변동 없음) · BOK 2.75%(7/16 인상 후 동결 유지, 8/27 금통위 대기, 변동 없음) · UST10Y 4.64%(8/4, -4bp)
- *   KTB3Y 3.758%(7/31 기준, 8/3~8/4치 미확인으로 유지) · S&P500 7,737.00(8/4, +1.79% 사상 최고 종가·호르무즈 재개방 기대) · KOSPI 6,358.95(8/4, +1.62%/+101.50p 반등, 非메모리 순환매)
+ * 2026-08-06 실측 교차검증(8/5 종가/최근치): Fed 3.625%(7/29 FOMC 동결, 다음 회의 9/16, 변동 없음) · BOK 2.75%(7/16 만장일치 인상 후 유지, 8/27 금통위 대기, 변동 없음) · UST10Y 4.62%(8/5, -2bp)
+ *   KTB3Y 3.669%(8/5, -7.1bp, 국제유가 급락) · S&P500 7,723.55(8/5, -0.17%/-12.97p, 4일 연속 상승 마감·다우는 사상 최고 종가) · KOSPI 6,598.26(8/5, +3.76%/+239.31p 급등, 반도체 투톱 강세)
  */
 const START_DATE = new Date(2023, 0, 1);
 const END_M = (() => {
@@ -77,10 +85,10 @@ const END_M = (() => {
 const LATEST = {
   usRate: 3.625,  // 미 연방기금금리 목표범위 중간값 (7/29 FOMC 동결)
   krRate: 2.75,   // 한국은행 기준금리 (7/16 인상, 8/27 금통위 대기)
-  us10y: 4.64,    // UST 10Y, 2026-08-04
-  kr3y: 3.758,    // KTB 3Y, 2026-07-31 (8/3~8/4 미확인으로 유지)
-  sp500: 7737.0,  // S&P 500, 2026-08-04 종가
-  kospi: 6358.95, // KOSPI, 2026-08-04 종가
+  us10y: 4.62,    // UST 10Y, 2026-08-05
+  kr3y: 3.669,    // KTB 3Y, 2026-08-05
+  sp500: 7723.55, // S&P 500, 2026-08-05 종가
+  kospi: 6598.26, // KOSPI, 2026-08-05 종가
 };
 
 function interp(anchors, m) {
@@ -481,6 +489,42 @@ ReactDOM.createRoot(document.getElementById("root")).render(<KostolanyEggDashboa
         navigator.serviceWorker.register("sw.js").catch(() => {});
       });
     }
+
+    // 진단: 렌더 실패 시 '로딩 중'에 머무르지 않고 원인을 화면에 표시한다.
+    (function () {
+      var shown = false;
+      function show(msg) {
+        if (shown) return;
+        var el = document.getElementById("loading");
+        if (!el) return;
+        shown = true;
+        el.style.color = "#f87171";
+        el.style.whiteSpace = "pre-wrap";
+        el.style.padding = "40px 20px";
+        el.style.textAlign = "left";
+        el.style.fontFamily = "ui-monospace, monospace";
+        el.style.fontSize = "13px";
+        el.textContent = "대시보드를 불러오지 못했습니다.\n\n" + msg;
+      }
+      window.addEventListener("error", function (e) {
+        show("오류: " + (e.message || e.error) + "\n(F12 → Console에서 상세 확인)");
+      });
+      setTimeout(function () {
+        if (!document.getElementById("loading")) return; // 정상 렌더됨
+        var missing = [];
+        if (typeof React === "undefined") missing.push("React");
+        if (typeof ReactDOM === "undefined") missing.push("ReactDOM");
+        if (typeof PropTypes === "undefined") missing.push("PropTypes");
+        if (typeof Recharts === "undefined") missing.push("Recharts");
+        if (typeof Babel === "undefined") missing.push("Babel");
+        show(
+          missing.length
+            ? "CDN 로드 실패: " + missing.join(", ") +
+              "\n네트워크 또는 unpkg.com 차단 여부를 확인하세요."
+            : "라이브러리는 모두 로드됐지만 렌더되지 않았습니다.\nF12 → Console 오류를 확인하세요."
+        );
+      }, 8000);
+    })();
   </script>
 </body>
 </html>
