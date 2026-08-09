@@ -72,23 +72,30 @@ function noise(i, seed) {
 /* ---------- 실측 앵커 기반 거시 모델 (m: 0 = 2023-01) ----------
  * END_M(차트 종점)은 페이지를 여는 시점의 현재 월로 자동 계산된다 → 날짜 자동 갱신.
  * 갱신 시에는 LATEST의 6개 "실측 원값"만 교체한다(보정 상수 수기 입력 불필요).
- * 2026-08-06 실측 교차검증(8/5 종가/최근치): Fed 3.625%(7/29 FOMC 동결, 다음 회의 9/16, 변동 없음) · BOK 2.75%(7/16 만장일치 인상 후 유지, 8/27 금통위 대기, 변동 없음) · UST10Y 4.62%(8/5, -2bp)
- *   KTB3Y 3.669%(8/5, -7.1bp, 국제유가 급락) · S&P500 7,723.55(8/5, -0.17%/-12.97p, 4일 연속 상승 마감·다우는 사상 최고 종가) · KOSPI 6,598.26(8/5, +3.76%/+239.31p 급등, 반도체 투톱 강세)
+ * 2026-08-10 실측 교차검증(8/7 종가/최근치): Fed 3.625%(7/29 FOMC 동결, 다음 회의 9/16, 변동 없음) · BOK 2.75%(7/16 만장일치 인상 후 유지, 8/27 금통위 대기, 변동 없음) · UST10Y 4.658%(8/7, -1.2bp)
+ *   KTB3Y 3.751%(8/7, +0.4bp) · S&P500 7,757.64(8/7, +0.62%/+47.68p 사상 최고 종가, 소프트웨어·메가캡 테크 주도) · KOSPI 6,258.77(8/7, -0.60%/-37.61p, 전일 급락 후 조정 지속)
  */
 const START_DATE = new Date(2023, 0, 1);
+// 현재 월 인덱스(2023-01-01 = 0). 월 내 경과일을 소수부로 포함한다.
+// ※ 정수(월 단위)로만 잡으면 END_M이 한 달 내내 고정돼 일간/주간 차트 가로축이 매월 1일에 멈춘다.
 const END_M = (() => {
   const now = new Date();
-  return (now.getFullYear() - START_DATE.getFullYear()) * 12 + (now.getMonth() - START_DATE.getMonth());
+  const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate(); // 이번 달 일수
+  return (
+    (now.getFullYear() - START_DATE.getFullYear()) * 12 +
+    (now.getMonth() - START_DATE.getMonth()) +
+    (now.getDate() - 1) / dim
+  );
 })();
 
 // ★ 스케줄 갱신 대상: 아래 6개 실측 원값만 교체한다
 const LATEST = {
   usRate: 3.625,  // 미 연방기금금리 목표범위 중간값 (7/29 FOMC 동결)
   krRate: 2.75,   // 한국은행 기준금리 (7/16 인상, 8/27 금통위 대기)
-  us10y: 4.62,    // UST 10Y, 2026-08-05
-  kr3y: 3.669,    // KTB 3Y, 2026-08-05
-  sp500: 7723.55, // S&P 500, 2026-08-05 종가
-  kospi: 6598.26, // KOSPI, 2026-08-05 종가
+  us10y: 4.658,   // UST 10Y, 2026-08-07
+  kr3y: 3.751,    // KTB 3Y, 2026-08-07
+  sp500: 7757.64, // S&P 500, 2026-08-07 종가
+  kospi: 6258.77, // KOSPI, 2026-08-07 종가
 };
 
 function interp(anchors, m) {
@@ -139,14 +146,24 @@ const MARKETS = {
 };
 
 const TF = {
-  Monthly: { key: "Monthly", label: "Monthly", count: END_M + 1, step: 1, amp: 0.5, window: 4 },
+  Monthly: { key: "Monthly", label: "Monthly", count: Math.floor(END_M) + 1, step: 1, amp: 0.5, window: 4 },
   Weekly: { key: "Weekly", label: "Weekly", count: 52, step: 1 / 4.33, amp: 1.15, window: 6 },
   Daily: { key: "Daily", label: "Daily", count: 90, step: 1 / 21, amp: 2.0, window: 10 },
 };
 // END_M / START_DATE는 파일 상단(거시 모델 섹션)에서 현재 월 기준으로 자동 산출된다.
 
+// 월 인덱스 m → 실제 달력 날짜. 30.44일 근사 누적은 달력과 어긋나 월 라벨이 밀린다(예: m=1 → "23.1").
+function mToDate(m) {
+  const whole = Math.floor(m);
+  const y = START_DATE.getFullYear();
+  const mo = START_DATE.getMonth() + whole; // Date 생성자가 12개월 초과분을 자동 이월
+  const dim = new Date(y, mo + 1, 0).getDate(); // 해당 월의 일수
+  const dayOff = Math.min(Math.round((m - whole) * dim), dim - 1); // 월 경계 침범 방지
+  return new Date(y, mo, 1 + dayOff);
+}
+
 function fmtDate(m, tf) {
-  const d = new Date(START_DATE.getTime() + Math.round(m * 30.44) * 86400000);
+  const d = mToDate(m);
   const yy = String(d.getFullYear()).slice(2);
   const mm = d.getMonth() + 1;
   const dd = d.getDate();
@@ -156,7 +173,8 @@ function fmtDate(m, tf) {
 
 function buildSeries(tfKey, mkt) {
   const tf = TF[tfKey];
-  const startM = tfKey === "Monthly" ? 0 : END_M - (tf.count - 1) * tf.step;
+  // 모든 타임프레임을 END_M(=오늘)에서 역산 → 종점이 항상 최신 날짜에 고정된다.
+  const startM = END_M - (tf.count - 1) * tf.step;
   const raw = [];
   for (let i = 0; i < tf.count; i++) {
     const m = startM + i * tf.step;
